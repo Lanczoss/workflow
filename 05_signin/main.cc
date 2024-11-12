@@ -1,9 +1,10 @@
+#include <fcntl.h>
 #include <signal.h>
 #include <workflow/WFFacilities.h>
 #include <workflow/WFHttpServer.h>
 #include <workflow/WFTaskFactory.h>
 
-#include <fstream>
+// #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -73,14 +74,27 @@ void process(WFHttpTask *serverTask) {
   // 如果是GET先返回一个sigin.html
   protocol::HttpRequest *req = serverTask->get_req();
   protocol::HttpResponse *resp = serverTask->get_resp();
+  // 需要创建一个context共享响应体
+  ServerContext *context = new ServerContext();
+  context->resp = resp;
+
+  series_of(serverTask)->set_context(context);
   // cout << req->get_method() << "\n";
   string method = req->get_method();
+  string uri = req->get_request_uri();
   if (method == "GET") {
-    // 返回postform.html
-    ifstream ifs("postform.html");
-    unique_ptr<char[]> buf(new char[615]());
-    ifs.read(buf.get(), 614);
-    resp->append_output_body(buf.get());
+    if (uri == "/login") {
+      // 返回postform.html
+      unique_ptr<char[]> buf(new char[615]());
+      // ifstream ifs("postform.html");
+      // ifs.read(buf.get(), 614);
+      WFFileIOTask *fileTask = WFTaskFactory::create_pread_task(
+          "postform.html", buf.get(), 614, 0, [resp](WFFileIOTask *preadTask) {
+            resp->append_output_body(preadTask->get_args()->buf, 615);
+          });
+      // resp->append_output_body(buf.get());
+      series_of(serverTask)->push_back(fileTask);
+    }
   } else if (method == "POST") {
     // 用户发送用户名和密码
     const void *body;
@@ -100,16 +114,13 @@ void process(WFHttpTask *serverTask) {
     protocol::RedisRequest *req = redisTask->get_req();
     req->set_request("hget", {"userinfo", username});
 
-    // 还需要创建一个context共享响应体
-    ServerContext *context = new ServerContext();
-    context->resp = resp;
     // cout << password << "\n";
     context->password = password;
 
-    series_of(serverTask)->set_context(context);
     series_of(serverTask)->push_back(redisTask);
-    serverTask->set_callback([context](WFHttpTask *) { delete context; });
   }
+
+  serverTask->set_callback([context](WFHttpTask *) { delete context; });
 }
 
 int main(void) {
